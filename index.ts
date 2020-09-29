@@ -23,18 +23,6 @@ interface Cell {
   dirty: boolean;
 }
 
-/**
- * @property number - column or row number
- * @property dimensions - for columns this will have a constant value of `0` for
- * `y`, and a constant value of `Number.MAX_SAFE_INTEGER` for height.
- * Conversly, a row will have a constant of `0` for `x` and a constant of
- * `Number.MAX_SAFE_INTEGER` for `width`.
- */
-// interface CellGroup {
-//   number: number;
-//   dimensions: Rect;
-// }
-
 interface WindowReaderInstance {
   scrollX: () => number;
   scrollY: () => number;
@@ -61,7 +49,6 @@ interface State {
   readonly visibleRows: readonly number[];
   readonly cells: readonly Cell[];
   readonly defaultCellDimensions: Point;
-  readonly scrollBuffer: number; // number of pixels to "pad" the virtual sheet
   readonly window: WindowReaderInstance;
 }
 
@@ -95,15 +82,8 @@ const defaultState: State = {
   visibleRows: [],
   cells: [],
   defaultCellDimensions: { x: 120, y: 40 },
-  scrollBuffer: 100,
   window: windowReader(window),
 };
-
-// function reducer(state: State, scrollPosition: Point): State {
-// use the padded bounding box to get col/row anticollisions
-// for each invisible col/row iterate through the cells and move them to the opposite side unless it is at min/max (update top/left values)
-// send the state to the renderer where it will read the cell positions and rewrite the top/left styles
-// }
 
 /**
  * -----------------------------------------------------------------------------
@@ -220,19 +200,13 @@ function diffGroups(prev: number[], next: number[]) {
 const cellsReducer: StateReducer = ({ state, action }) => {
   const {
     viewportRect,
-    scrollBuffer,
     defaultCellDimensions: cellDimensions,
   } = state;
-  // const paddedViewport = padRect(scrollBuffer, viewportRect, {
-  //   x: state.sheet.dimensions.x,
-  //   y: state.sheet.dimensions.y,
-  // });
-  const paddedViewport = viewportRect;
   switch (action.type) {
     case "init": {
       let cells: Cell[] = [];
-      const visibleColumns = getVisibleColumns(paddedViewport, cellDimensions);
-      const visibleRows = getVisibleRows(paddedViewport, cellDimensions);
+      const visibleColumns = getVisibleColumns(viewportRect, cellDimensions);
+      const visibleRows = getVisibleRows(viewportRect, cellDimensions);
       const rowStart = visibleRows[0];
       const rowEnd = visibleRows[visibleRows.length - 1];
       const columnStart = visibleColumns[0];
@@ -256,8 +230,8 @@ const cellsReducer: StateReducer = ({ state, action }) => {
 
     case "scroll": {
       const visible = {
-        columns: getVisibleColumns(paddedViewport, cellDimensions),
-        rows: getVisibleRows(paddedViewport, cellDimensions),
+        columns: getVisibleColumns(viewportRect, cellDimensions),
+        rows: getVisibleRows(viewportRect, cellDimensions),
       };
       const columnsDiff = diffGroups(
         state.visibleColumns.concat(),
@@ -310,7 +284,7 @@ const cellsReducer: StateReducer = ({ state, action }) => {
     default:
       return { state, action };
   }
-};
+};;;;;;
 
 const reducer: StateReducer = pipeReducers(
   sheetReducer,
