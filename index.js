@@ -168,21 +168,26 @@ const cellsReducer = ({ state, action }) => {
 ;
 const reducer = pipeReducers(sheetReducer, viewportRectReducer, cellsReducer);
 function renderUnsafe(state) {
-    const cmp = (...fns) => fns.reduce((f, g) => () => g(f()));
-    let rafs = [];
-    state.cells.forEach((cell) => {
-        rafs.push(() => {
-            if (!cell.node)
-                return;
+    const { cells } = state;
+    const len = cells.length;
+    const batchSize = 250;
+    let idx = 0;
+    const renderCell = () => {
+        const end = idx + batchSize <= len ? idx + batchSize : len;
+        const slice = cells.slice(idx, end);
+        for (let cell of slice) {
             if (cell.dirty) {
-                cell.node.style.transform = `translate(${cell.position.x}px, ${cell.position.y}px)`;
-                // cell.node.style.left = `${cell.position.x}px`;
+                const { position: { x, y }, } = cell;
+                cell.node.style.transform = `translate(${x}px, ${y}px)`;
                 cell.node.innerText = cell.text;
                 cell.dirty = false;
             }
-        });
-    });
-    cmp(...rafs)();
+        }
+        idx = end;
+        if (idx < len)
+            requestAnimationFrame(renderCell);
+    };
+    requestAnimationFrame(renderCell);
 }
 function init(root, head) {
     let { state } = reducer({
@@ -216,9 +221,8 @@ function init(root, head) {
         renderUnsafe(nextState);
         state = nextState;
     };
-    // const onScroll = throttle(scroll, 16)
-    // const onScroll = () => window.requestAnimationFrame(scroll);
-    document.addEventListener("scroll", scroll, { passive: true });
+    const onScroll = throttle(scroll, 32);
+    document.addEventListener("scroll", onScroll, { passive: true });
 }
 const root = document.getElementById("root");
 const head = document.head;
@@ -250,12 +254,12 @@ function pipeReducers(...reducers) {
 // function clamp(min: number, max: number, value: number): number {
 //   return Math.max(min, Math.min(max, value))
 // }
-function padRect(padding, rect, max) {
+function padRect(padding, rect) {
     return {
         x: Math.max(0, rect.x - padding),
         y: Math.max(0, rect.y - padding),
-        width: Math.min(max.x, rect.width + padding),
-        height: Math.min(max.y, rect.height + padding),
+        width: rect.width + padding,
+        height: rect.height + padding,
     };
 }
 function throttle(fn, delay) {

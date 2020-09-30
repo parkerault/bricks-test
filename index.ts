@@ -293,20 +293,28 @@ const reducer: StateReducer = pipeReducers(
 );
 
 function renderUnsafe(state: State): void {
-  const cmp = (...fns: Function[]) => fns.reduce((f, g) => () => g(f()));
-  let rafs: Function[] = [];
-  state.cells.forEach((cell) => {
-    rafs.push(() => {
-      if (!cell.node) return;
+  const { cells } = state;
+  const len = cells.length;
+  const batchSize = 250;
+  let idx = 0;
+  const renderCell = () => {
+    const end = idx + batchSize <= len ? idx + batchSize : len;
+    const slice = cells.slice(idx, end);
+    for (let cell of slice) {
       if (cell.dirty) {
-        cell.node.style.transform = `translate(${cell.position.x}px, ${cell.position.y}px)`;
-        // cell.node.style.left = `${cell.position.x}px`;
-        cell.node.innerText = cell.text;
+        const {
+          position: { x, y },
+        } = cell;
+        cell.node!.style.transform = `translate(${x}px, ${y}px)`;
+        cell.node!.innerText = cell.text;
         cell.dirty = false;
       }
-    });
-  });
-  cmp(...rafs)();
+    }
+    idx = end;
+    if (idx < len) requestAnimationFrame(renderCell);
+  };
+
+  requestAnimationFrame(renderCell);
 }
 
 function init(root: HTMLElement, head: HTMLElement): void {
@@ -341,9 +349,8 @@ function init(root: HTMLElement, head: HTMLElement): void {
     renderUnsafe(nextState);
     state = nextState;
   };
-  // const onScroll = throttle(scroll, 16)
-  // const onScroll = () => window.requestAnimationFrame(scroll);
-  document.addEventListener("scroll", scroll, { passive: true });
+  const onScroll = throttle(scroll, 32);
+  document.addEventListener("scroll", onScroll, { passive: true });
 }
 
 const root = document.getElementById("root");
@@ -383,12 +390,12 @@ function pipeReducers(...reducers: StateReducer[]) {
 //   return Math.max(min, Math.min(max, value))
 // }
 
-function padRect(padding: number, rect: Rect, max: Point): Rect {
+function padRect(padding: number, rect: Rect): Rect {
   return {
     x: Math.max(0, rect.x - padding),
     y: Math.max(0, rect.y - padding),
-    width: Math.min(max.x, rect.width + padding),
-    height: Math.min(max.y, rect.height + padding),
+    width: rect.width + padding,
+    height: rect.height + padding,
   };
 }
 
