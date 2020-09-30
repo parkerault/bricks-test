@@ -1,15 +1,15 @@
 "use strict";
 const defaultState = {
     sheet: {
-        columnCount: 500,
+        colCount: 500,
         rowCount: 500,
         dimensions: { x: 0, y: 0 },
     },
     viewportRect: { x: 0, y: 0, width: 0, height: 0 },
-    visibleColumns: [],
-    visibleRows: [],
+    prevColOffset: 0,
+    prevRowOffset: 0,
     cells: [],
-    defaultCellDimensions: { x: 120, y: 40 },
+    cellDimensions: { x: 120, y: 40 },
     window: windowReader(window),
 };
 /**
@@ -21,8 +21,8 @@ const sheetReducer = ({ state, action }) => {
     switch (action.type) {
         case "init": {
             const dimensions = {
-                x: state.sheet.columnCount * state.defaultCellDimensions.x,
-                y: state.sheet.rowCount * state.defaultCellDimensions.y,
+                x: state.sheet.colCount * state.cellDimensions.x,
+                y: state.sheet.rowCount * state.cellDimensions.y,
             };
             return {
                 action,
@@ -64,161 +64,193 @@ const viewportRectReducer = ({ state, action }) => {
  * CELLS REDUCER
  * -----------------------------------------------------------------------------
  */
-function cellConstructor(dimensions, column, row) {
+const getCellText = (col, row) => `${col}:${row}`;
+function cellConstructor(dimensions, col, row) {
     return {
-        column,
+        col,
         row,
-        text: `${column}:${row}`,
-        position: { x: column * dimensions.x, y: row * dimensions.y },
-        node: null,
+        text: getCellText(col, row),
+        position: { x: col * dimensions.x, y: row * dimensions.y },
         dirty: true,
     };
 }
-function getVisibleColumns(viewportRect, cellDimensions) {
-    const columnsFromOrigin = Math.floor(viewportRect.x / cellDimensions.x);
-    const visibleColumnCount = Math.ceil(viewportRect.width / cellDimensions.x);
-    return Array.from({ length: visibleColumnCount }).map((_, i) => columnsFromOrigin + i);
-}
-function getVisibleRows(viewportRect, cellDimensions) {
-    const rowsFromOrigin = Math.floor(viewportRect.y / cellDimensions.y);
-    const visibleRowCount = Math.ceil(viewportRect.height / cellDimensions.y);
-    return Array.from({ length: visibleRowCount }).map((_, i) => rowsFromOrigin + i);
-}
-function diffGroups(prev, next) {
-    // Use a set for faster lookup
-    const prevSet = new Set(prev);
-    const nextSet = new Set(next);
-    const added = next.filter((x) => !prevSet.has(x));
-    const removed = prev.filter((x) => !nextSet.has(x));
-    return { added, removed };
+const getScrollData = (state) => {
+    const { viewportRect: { x, y, width, height }, prevColOffset, prevRowOffset, cellDimensions: cell, } = state;
+    const colOffset = x === 0 ? 0 : Math.floor(x / cell.x);
+    const colMax = colOffset + Math.ceil(width / cell.x);
+    const colSpan = colMax - colOffset;
+    const colDiff = colOffset - prevColOffset;
+    const rowOffset = y === 0 ? 0 : Math.floor(y / cell.y);
+    const rowMax = rowOffset + Math.ceil(height / cell.y);
+    const rowSpan = rowMax - rowOffset;
+    const rowDiff = rowOffset - prevRowOffset;
+    return {
+        colOffset,
+        colMax,
+        colSpan,
+        colDiff,
+        rowOffset,
+        rowMax,
+        rowSpan,
+        rowDiff,
+    };
+};
+(function testGetScrollData() {
+    const cellX = 120, cellY = 40, colCount = 10, rowCount = 20;
+    const positiveScroll = {
+        // slightly clipping 2nd and 9th cells; should span 7 cells.
+        viewportRect: { x: cellX + 10, y: cellY + 10, width: cellX * 8 - 10, height: cellY * 8 - 10 },
+        prevColOffset: 0,
+        prevRowOffset: 0,
+        cells: [],
+        sheet: { colCount, rowCount, dimensions: { x: 1200, y: 1200 } },
+        cellDimensions: { x: 120, y: 40 },
+        window: windowReader(window)
+    };
+    let result = getScrollData(positiveScroll);
+    console.group('testGetScrollData positive scroll');
+    console.assert(result.colOffset === 1, `colOffset: expected 1, got ${result.colOffset}`);
+    console.assert(result.colMax === 8, `colMax: expected 8, got ${result.colMax}`);
+    console.assert(result.colSpan === 7, `colSpan: expected 7, got ${result.colSpan}`);
+    console.assert(result.colDiff === 1, `colDiff: expected 1, got ${result.colDiff}`);
+    console.assert(result.rowOffset === 1, `rowOffset: expected 1, got ${result.rowOffset}`);
+    console.assert(result.rowMax === 8, `rowMax: expected 8, got ${result.rowMax}`);
+    console.assert(result.rowSpan === 7, `rowSpan: expected 7, got ${result.rowSpan}`);
+    console.assert(result.rowDiff === 1, `rowDiff: expected 1, got ${result.rowDiff}`);
+    console.groupEnd();
+    const negativeScroll = Object.assign(Object.assign({}, positiveScroll), { prevColOffset: 2, prevRowOffset: 2 });
+    result = getScrollData(negativeScroll);
+    console.group('testGetScrollData negative scroll');
+    console.assert(result.colOffset === 1, `colOffset: expected 1, got ${result.colOffset}`);
+    console.assert(result.colMax === 8, `colMax: expected 8, got ${result.colMax}`);
+    console.assert(result.colSpan === 7, `colSpan: expected 7, got ${result.colSpan}`);
+    console.assert(result.colDiff === -1, `colDiff: expected 1, got ${result.colDiff}`);
+    console.assert(result.rowOffset === 1, `rowOffset: expected 1, got ${result.rowOffset}`);
+    console.assert(result.rowMax === 8, `rowMax: expected 8, got ${result.rowMax}`);
+    console.assert(result.rowSpan === 7, `rowSpan: expected 7, got ${result.rowSpan}`);
+    console.assert(result.rowDiff === -1, `rowDiff: expected 1, got ${result.rowDiff}`);
+    console.groupEnd();
+})();
+function repositionCell() {
 }
 const cellsReducer = ({ state, action }) => {
-    const { viewportRect, defaultCellDimensions: cellDimensions, } = state;
     switch (action.type) {
         case "init": {
             let cells = [];
-            const visibleColumns = getVisibleColumns(viewportRect, cellDimensions);
-            const visibleRows = getVisibleRows(viewportRect, cellDimensions);
-            const rowStart = visibleRows[0];
-            const rowEnd = visibleRows[visibleRows.length - 1];
-            const columnStart = visibleColumns[0];
-            const columnEnd = visibleColumns[visibleColumns.length - 1];
-            for (let row = rowStart; row <= rowEnd; row++) {
-                for (let column = columnStart; column <= columnEnd; column++) {
-                    const cell = cellConstructor(cellDimensions, column, row);
-                    cells.push(cell);
+            const { colOffset, colMax, rowOffset, rowMax } = getScrollData(state);
+            for (let row = rowOffset; row <= rowMax; row++) {
+                for (let col = colOffset; col <= colMax; col++) {
+                    cells.push(cellConstructor(state.cellDimensions, col, row));
                 }
             }
             return {
                 action,
-                state: Object.assign(Object.assign({}, state), { visibleColumns,
-                    visibleRows,
-                    cells }),
+                state: Object.assign(Object.assign({}, state), { prevColOffset: colOffset, prevRowOffset: rowOffset, cells }),
             };
         }
+        /*
+    winx 6.6 = 79.2px
+    max 10.7 = 128.4px
+    diff 4.1
+    offset
+        */
         case "scroll": {
-            const visible = {
-                columns: getVisibleColumns(viewportRect, cellDimensions),
-                rows: getVisibleRows(viewportRect, cellDimensions),
-            };
-            const columnsDiff = diffGroups(state.visibleColumns.concat(), visible.columns);
-            const rowsDiff = diffGroups(state.visibleRows.concat(), visible.rows);
-            // here we are assuming that the removed list has the same length as the
-            // added list. We have to loop over every cell twice to move columns and
-            // rows separately.
+            const { colOffset, colMax, colSpan, colDiff, rowOffset, rowMax, rowSpan, rowDiff, } = getScrollData(state);
             const cells = state.cells.map((cell) => {
-                const colIdx = columnsDiff.removed.indexOf(cell.column);
-                const rowIdx = rowsDiff.removed.indexOf(cell.row);
-                if (colIdx < 0 && rowIdx < 0)
-                    return cell;
-                let column = cell.column;
-                let row = cell.row;
-                let position = Object.assign({}, cell.position);
-                let dirty = false;
-                if (colIdx >= 0) {
-                    column = columnsDiff.added[colIdx];
-                    position.x = column * cellDimensions.x;
+                let col = cell.col, row = cell.row, x = cell.position.x, y = cell.position.y, dirty = false;
+                if (cell.col < colOffset || cell.col > colMax) {
+                    col = colDiff < 0 ? col - colSpan + colDiff : col + colSpan + colDiff;
+                    x = col * state.cellDimensions.x;
                     dirty = true;
                 }
-                if (rowIdx >= 0) {
-                    row = rowsDiff.added[rowIdx];
-                    position.y = row * cellDimensions.y;
+                if (cell.row < rowOffset || cell.row > rowMax) {
+                    row = rowDiff < 0 ? row - rowSpan + rowDiff : row + rowSpan + rowDiff;
+                    y = row * state.cellDimensions.y;
                     dirty = true;
                 }
-                if (dirty === true) {
-                    return Object.assign(Object.assign({}, cell), { column,
+                if (dirty) {
+                    return {
+                        col,
                         row,
-                        position, text: `${column}:${row}`, dirty });
+                        position: { x, y },
+                        text: getCellText(col, row),
+                        node: cell.node,
+                        dirty,
+                    };
                 }
-                return cell;
+                else {
+                    return cell;
+                }
             });
             return {
                 action,
-                state: Object.assign(Object.assign({}, state), { visibleColumns: visible.columns, visibleRows: visible.rows, cells }),
+                state: Object.assign(Object.assign({}, state), { prevColOffset: colOffset, prevRowOffset: rowOffset, cells }),
             };
         }
         default:
             return { state, action };
     }
 };
-;
-;
-;
-;
-;
-const reducer = pipeReducers(sheetReducer, viewportRectReducer, cellsReducer);
+const reducer = pipeReducers(sheetReducer, // viewport measurements must be done first to prevent thrashing
+viewportRectReducer, cellsReducer);
 function renderUnsafe(state) {
-    const cmp = (...fns) => fns.reduce((f, g) => () => g(f()));
-    let rafs = [];
-    state.cells.forEach((cell) => {
-        rafs.push(() => {
-            if (!cell.node)
-                return;
-            if (cell.dirty) {
-                cell.node.style.transform = `translate(${cell.position.x}px, ${cell.position.y}px)`;
-                // cell.node.style.left = `${cell.position.x}px`;
-                cell.node.innerText = cell.text;
-                cell.dirty = false;
-            }
-        });
+    const { cells } = state;
+    const len = cells.length;
+    const batchSize = 50000;
+    let idx = 0;
+    // const renderCell = () => {
+    //   const end = idx + batchSize <= len ? idx + batchSize : len;
+    //   const slice = cells.slice(idx, end);
+    //   for (let cell of slice) {
+    //     if (cell.dirty) {
+    //       const {
+    //         position: { x, y },
+    //       } = cell;
+    //       cell.node!.style.transform = `translate(${x}px, ${y}px)`;
+    //       cell.node!.innerText = cell.text;
+    //       cell.dirty = false;
+    //     }
+    //   }
+    //   idx = end;
+    //   if (idx < len) requestAnimationFrame(renderCell);
+    // };
+    // requestAnimationFrame(renderCell);
+    cells.forEach(cell => {
+        if (cell.dirty) {
+            const { position: { x, y }, } = cell;
+            cell.node.style.transform = `translate(${x}px, ${y}px)`;
+            cell.node.innerText = cell.text;
+            cell.dirty = false;
+        }
     });
-    cmp(...rafs)();
 }
 function init(root, head) {
     let { state } = reducer({
         state: defaultState,
         action: { type: "init" },
     });
-    const stylesheet = initializeStylesheet(state.defaultCellDimensions, {
-        x: state.sheet.columnCount,
+    const stylesheet = initializeStylesheet(state.cellDimensions, {
+        x: state.sheet.colCount,
         y: state.sheet.rowCount,
     });
     head.appendChild(stylesheet);
-    const fragment = document.createDocumentFragment();
     const sheetNode = document.createElement("div");
     sheetNode.className = "sheet";
-    const cellNodes = state.cells.map((cell) => {
-        const cellNode = document.createElement("span");
-        cellNode.className = "cell";
-        cellNode.style.transform = `translate(${cell.position.x}px, ${cell.position.y}px)`;
-        cellNode.innerText = cell.text;
-        cell.dirty = false; // Bad, but I can't think of a better way.
-        cell.node = cellNode;
-        return cellNode;
-    });
-    fragment.appendChild(sheetNode);
-    cellNodes.forEach((node) => {
-        sheetNode.appendChild(node);
-    });
-    root.appendChild(fragment);
+    for (let cell of state.cells) {
+        cell.node = document.createElement("span");
+        cell.node.className = "cell";
+        sheetNode.appendChild(cell.node);
+    }
+    root.appendChild(sheetNode);
     const scroll = () => {
         const { state: nextState } = reducer({ state, action: { type: "scroll" } });
         renderUnsafe(nextState);
         state = nextState;
     };
-    // const onScroll = throttle(scroll, 16)
+    // const onScroll = throttle(scroll, 32)
     // const onScroll = () => window.requestAnimationFrame(scroll);
     document.addEventListener("scroll", scroll, { passive: true });
+    renderUnsafe(state);
 }
 const root = document.getElementById("root");
 const head = document.head;
